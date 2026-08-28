@@ -1,11 +1,12 @@
 import os
 import json
-import re
-import shutil
+import hashlib
+import getpass
 import subprocess
 import time
+import re
 
-VERSION = "2.0.0"
+VERSION = "1.0.0"
 DATA_FILE = os.path.expanduser("~/.nightu_vps.json")
 
 
@@ -14,8 +15,8 @@ DATA_FILE = os.path.expanduser("~/.nightu_vps.json")
 # ============================================================
 
 RESET = "\033[0m"
-CYAN = "\033[96m"
 PURPLE = "\033[95m"
+CYAN = "\033[96m"
 GREEN = "\033[92m"
 RED = "\033[91m"
 YELLOW = "\033[93m"
@@ -32,9 +33,430 @@ def clear():
 
 
 def pause():
-    input(f"\n{GRAY}Apasă ENTER pentru a continua...{RESET}")
+    input(f"\n{GRAY}Press ENTER...{RESET}")
 
 
+def run(command):
+    return subprocess.run(
+        command,
+        shell=True,
+        text=True,
+        capture_output=True
+    )
+
+
+def command_exists(command):
+    return subprocess.call(
+        f"command -v {command} >/dev/null 2>&1",
+        shell=True
+    ) == 0
+
+
+# ============================================================
+# DATA
+# ============================================================
+
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        return {"vps": {}}
+
+    try:
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {"vps": {}}
+
+
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+
+# ============================================================
+# PASSWORD
+# ============================================================
+
+def hash_password(password):
+    return hashlib.sha256(
+        password.encode()
+    ).hexdigest()
+
+
+def verify_password(password, password_hash):
+    return hash_password(password) == password_hash
+
+
+# ============================================================
+# BANNER
+# ============================================================
+
+def banner():
+    print(PURPLE + r"""
+╔══════════════════════════════════════════════╗
+║                                              ║
+║          🌙 VPS-MAKER-NIGHTU                ║
+║                  v1.0                        ║
+║                                              ║
+║             VPS MANAGEMENT                   ║
+║                BY NIGHTU                     ║
+║                                              ║
+╚══════════════════════════════════════════════╝
+""" + RESET)
+
+
+# ============================================================
+# PROOT
+# ============================================================
+
+def proot_installed():
+    return command_exists("proot-distro")
+
+
+def check_proot():
+    if not proot_installed():
+        print(RED + """
+❌ proot-distro nu este instalat.
+
+Instalează-l cu:
+
+pkg update -y
+pkg install proot-distro -y
+""" + RESET)
+
+        pause()
+        return False
+
+    return True
+
+
+# ============================================================
+# NAME VALIDATION
+# ============================================================
+
+def clean_name(name):
+    name = name.strip()
+
+    name = re.sub(
+        r"[^a-zA-Z0-9_-]",
+        "",
+        name
+    )
+
+    return name[:30]
+
+
+# ============================================================
+# CREATE ID
+# ============================================================
+
+def generate_id():
+    data = load_data()
+
+    number = 1
+
+    while True:
+        vps_id = f"nightu-vps-{number}"
+
+        if vps_id not in data["vps"]:
+            return vps_id
+
+        number += 1
+
+
+# ============================================================
+# CREATE VPS
+# ============================================================
+
+def create_vps():
+
+    clear()
+    banner()
+
+    if not check_proot():
+        return
+
+    data = load_data()
+
+    print(CYAN + "➕ CREATE VPS\n" + RESET)
+
+    name = input("🌙 VPS Name: ")
+    name = clean_name(name)
+
+    if not name:
+        print(RED + "❌ Nume invalid." + RESET)
+        pause()
+        return
+
+    # Check duplicate display names
+    for vps in data["vps"].values():
+        if vps["name"].lower() == name.lower():
+            print(RED + "❌ Acest nume este deja folosit." + RESET)
+            pause()
+            return
+
+    print("""
+🖥️ Select OS:
+
+1. Ubuntu
+2. Debian
+3. Alpine
+""")
+
+    choice = input("OS > ").strip()
+
+    systems = {
+        "1": "ubuntu",
+        "2": "debian",
+        "3": "alpine"
+    }
+
+    if choice not in systems:
+        print(RED + "❌ OS invalid." + RESET)
+        pause()
+        return
+
+    os_name = systems[choice]
+
+    username = input(
+        "\n👤 Username [nightu]: "
+    ).strip()
+
+    if not username:
+        username = "nightu"
+
+    username = clean_name(username)
+
+    if not username:
+        print(RED + "❌ Username invalid." + RESET)
+        pause()
+        return
+
+    password = getpass.getpass(
+        "🔐 Password: "
+    )
+
+    password2 = getpass.getpass(
+        "🔐 Confirm password: "
+    )
+
+    if not password:
+        print(RED + "❌ Password-ul nu poate fi gol." + RESET)
+        pause()
+        return
+
+    if password != password2:
+        print(RED + "❌ Parolele nu coincid." + RESET)
+        pause()
+        return
+
+    print()
+    print(PURPLE + "🌙 Creating VPS..." + RESET)
+
+    vps_id = generate_id()
+
+    command = (
+        f"proot-distro install "
+        f"--override-alias {vps_id} {os_name}"
+    )
+
+    result = subprocess.run(
+        command,
+        shell=True
+    )
+
+    if result.returncode != 0:
+        print(RED + "\n❌ VPS creation failed." + RESET)
+        pause()
+        return
+
+    # Save VPS
+    data["vps"][vps_id] = {
+        "name": name,
+        "os": os_name,
+        "username": username,
+        "password_hash": hash_password(password),
+        "ram": 2048,
+        "cpu": 2,
+        "disk": 10,
+        "created": time.strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+    }
+
+    save_data(data)
+
+    print(GREEN + """
+╔════════════════════════════════════╗
+║       ✅ VPS CREATED!              ║
+╚════════════════════════════════════╝
+""" + RESET)
+
+    print(f"🌙 Name     : {name}")
+    print(f"🆔 ID       : {vps_id}")
+    print(f"🖥️ OS       : {os_name}")
+    print(f"👤 Username : {username}")
+    print("🔐 Password : saved securely")
+    print("👑 Access   : ROOT")
+
+    pause()
+
+
+# ============================================================
+# SELECT VPS
+# ============================================================
+
+def select_vps():
+
+    data = load_data()
+
+    if not data["vps"]:
+        print(YELLOW + "📭 Nu există VPS-uri." + RESET)
+        pause()
+        return None
+
+    items = list(data["vps"].items())
+
+    print()
+
+    for i, (vps_id, info) in enumerate(items, 1):
+        print(
+            f"{i}. 🌙 {info['name']} "
+            f"({vps_id})"
+        )
+
+    choice = input(
+        "\n🌙 Select VPS > "
+    ).strip()
+
+    try:
+        index = int(choice) - 1
+
+        if index < 0 or index >= len(items):
+            raise ValueError
+
+        return items[index][0]
+
+    except:
+        print(RED + "❌ Selecție invalidă." + RESET)
+        pause()
+        return None
+
+
+# ============================================================
+# LOGIN
+# ============================================================
+
+def login_vps(vps_id):
+
+    data = load_data()
+
+    if vps_id not in data["vps"]:
+        return False
+
+    info = data["vps"][vps_id]
+
+    clear()
+
+    print(PURPLE + r"""
+╔══════════════════════════════════════════════╗
+║                                              ║
+║              🌙 NIGHTU LOGIN                 ║
+║                                              ║
+╚══════════════════════════════════════════════╝
+""" + RESET)
+
+    print(
+        f"\n🖥️ VPS: {WHITE}{info['name']}{RESET}\n"
+    )
+
+    username = input(
+        "👤 Username: "
+    ).strip()
+
+    password = getpass.getpass(
+        "🔐 Password: "
+    )
+
+    if username != info["username"]:
+        print(RED + "\n❌ Username incorrect." + RESET)
+        time.sleep(2)
+        return False
+
+    if not verify_password(
+        password,
+        info["password_hash"]
+    ):
+        print(RED + "\n❌ Password incorrect." + RESET)
+        time.sleep(2)
+        return False
+
+    print(
+        GREEN +
+        "\n✅ Login successful!"
+        + RESET
+    )
+
+    time.sleep(1)
+
+    return True
+
+
+# ============================================================
+# START VPS
+# ============================================================
+
+def start_vps():
+
+    clear()
+    banner()
+
+    if not check_proot():
+        return
+
+    data = load_data()
+
+    vps_id = select_vps()
+
+    if not vps_id:
+        return
+
+    info = data["vps"][vps_id]
+
+    # Login screen first
+    if not login_vps(vps_id):
+        pause()
+        return
+
+    clear()
+
+    print(
+        GREEN +
+        f"""
+╔══════════════════════════════════════════════╗
+║                                              ║
+║       🟢 {info['name']:^32} ║
+║                                              ║
+║       👑 ROOT ACCESS GRANTED                ║
+║                                              ║
+╚══════════════════════════════════════════════╝
+"""
+        + RESET
+    )
+
+    print(
+        f"{GRAY}Connecting to Linux environment...{RESET}\n"
+    )
+
+    time.sleep(1)
+
+    # Enter PRoot environment
+    subprocess.run(
+        f"proot-distro login {vps_id} "
+        f"-- /bin/bash -c "
+        f"'export VPS_NAME=\"{info['name']}\"; "
+        f"export VPS_USER=\"{info['username']}\"; "
+        f"echo \"\"; "
+        f"echo \"
 def command_exists(command):
     return shutil.which(command) is not None
 
