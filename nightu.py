@@ -78,6 +78,7 @@ def get_data_file_path():
 
 
 DATA_FILE = str(get_data_file_path())
+CONFIG_FILE = str(Path(DATA_FILE).with_name("config.json"))
 
 
 def load_vps():
@@ -110,27 +111,31 @@ def save_vps(vps):
         print(f"Error saving data file: {e}")
 
 
-def docker_available():
-    return command_exists("docker")
+def load_config():
+    path = Path(CONFIG_FILE)
+    if not path.exists():
+        return {}
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_config(cfg):
+    path = Path(CONFIG_FILE)
+    tmp = path.with_suffix(".tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=4)
+        tmp.replace(path)
+    except Exception as e:
+        print(f"Error saving config file: {e}")
 
 
 # =========================
-# UI
-# =========================
-
-
-def banner():
-    print(r"""
-╔════════════════════════════════════════════╗
-║        🌙 NIGHTU VPS MAKER                 ║
-║               v1.2.0                      ║
-║             VPS MANAGER                   ║
-╚════════════════════════════════════════════╝
-""")
-
-
-# =========================
-# Helpers
+# Backend detection
 # =========================
 
 
@@ -155,6 +160,68 @@ def docker_permission_check(stderr_text):
         or "cannot connect to the docker daemon" in low
         or "got permission denied" in low
     )
+
+
+def detect_backend():
+    """Detect available backend: 'docker', 'podman', or 'ssh'.
+
+    If neither docker nor podman is available locally, but an SSH remote
+    is configured in config.json and ssh is available, return 'ssh'.
+    """
+    cfg = load_config()
+
+    if command_exists("docker"):
+        return "docker"
+    if command_exists("podman"):
+        return "podman"
+
+    # If SSH remote configured and ssh client exists, use ssh backend
+    if command_exists("ssh") and cfg.get("ssh_remote"):
+        return "ssh"
+
+    return None
+
+
+def get_container_cmd(*args):
+    """Return command list for container tool with given args.
+
+    Supports local docker/podman or ssh remote (uses docker on remote).
+    """
+    backend = detect_backend()
+    cfg = load_config()
+
+    if backend == "docker":
+        return ["docker"] + list(args)
+    elif backend == "podman":
+        return ["podman"] + list(args)
+    elif backend == "ssh":
+        remote = cfg.get("ssh_remote")
+        if not remote:
+            return ["docker"] + list(args)  # fallback
+        # Build: ssh remote docker <args...>
+        return ["ssh", remote, "docker"] + list(args)
+
+    # Fallback to docker command; safe_run will report not found
+    return ["docker"] + list(args)
+
+
+def backend_available():
+    return detect_backend() is not None
+
+
+# =========================
+# UI
+# =========================
+
+
+def banner():
+    print(r"""
+╔════════════════════════════════════════════╗
+║        🌙 NIGHTU VPS MAKER                 ║
+║               v1.2.0                      ║
+║             VPS MANAGER                   ║
+╚════════════════════════════════════════════╝
+""")
 
 
 # =========================
@@ -192,14 +259,15 @@ def list_vps():
 
 
 def get_status(name):
-    if not docker_available():
-        return "⚪ Docker unavailable"
+    if not backend_available():
+        return "⚪ No container backend"
 
-    result = safe_run(["docker", "inspect", "-f", "{{.State.Status}}", name])
+    cmd = get_container_cmd("inspect", "-f", "{{.State.Status}}", name)
+    result = safe_run(cmd)
 
     if result.returncode != 0:
         # If stderr suggests permission issue, show helpful message
-        if docker_permission_check(result.stderr):
+        if docker_permission_check(getattr(result, "stderr", "")):
             return "⚪ Docker permission error"
         return "⚪ NOT FOUND"
 
@@ -224,11 +292,40 @@ def create_vps():
     clear()
     banner()
 
-    if not docker_available():
-        print("❌ Docker is not installed or unavailable.")
-        print("Install Docker on a supported Linux VPS first.")
-        pause()
-        return
+    if not backend_available():
+        # Offer to configure remote SSH if possible
+        if command_exists("ssh"):
+            print("❌ No local Docker/Podman found.")
+            use_remote = input("Do you want to configure a remote Docker host via SSH? (user@host) [y/N]: ").strip().lower()
+            if use_remote == "y" or use_remote == "yes":
+                remote = input("Enter SSH target (user@host): ").strip()
+                if remote:
+                    # Test connection
+                    print(f"Testing SSH connection to {remote}...")
+                    test = safe_run(["ssh", remote, "docker", "ps"], capture_output=True)
+                    if test.returncode == 0:
+                        cfg = load_config()
+                        cfg["ssh_remote"] = remote
+                        save_config(cfg)
+                        print("✅ Remote Docker host configured.")
+                    else:
+                        print("❌ Failed to connect to remote Docker host via SSH. Ensure SSH access and Docker installed on remote.")
+                        print(test.stderr)
+                        pause()
+                        return
+                else:
+                    print("Cancelled.")
+                    pause()
+                    return
+            else:
+                print("Cancelled: No backend available.")
+                pause()
+                return
+        else:
+            print("❌ Docker/Podman not available and SSH not found. Cannot create VPS on this device.")
+            print("Options: run on a Linux host with Docker, install Podman, or configure a remote Docker SSH target from another machine.")
+            pause()
+            return
 
     vps = load_vps()
 
@@ -269,19 +366,19 @@ def create_vps():
 
     # Ensure image is available (pull if needed)
     print(f"📥 Pulling image {image} (this may take a while)...")
-    pull = safe_run(["docker", "pull", image])
+    pull_cmd = get_container_cmd("pull", image)
+    pull = safe_run(pull_cmd)
     if pull.returncode != 0:
-        if docker_permission_check(pull.stderr):
+        if docker_permission_check(getattr(pull, "stderr", "")):
             print("❌ Docker permission error while pulling image. Try running with appropriate privileges.")
         else:
             print("❌ Failed to pull image:")
-            print(pull.stderr)
+            print(getattr(pull, "stderr", ""))
         pause()
         return
 
-    # Run container without shell to avoid injection
-    cmd = [
-        "docker",
+    # Run container
+    cmd = get_container_cmd(
         "run",
         "-d",
         "--name",
@@ -295,16 +392,16 @@ def create_vps():
         image,
         "sleep",
         "infinity",
-    ]
+    )
 
     result = safe_run(cmd)
 
     if result.returncode != 0:
         print("\n❌ Failed to create VPS.")
-        if docker_permission_check(result.stderr):
+        if docker_permission_check(getattr(result, "stderr", "")):
             print("❌ Docker permission error. Make sure your user can access the Docker daemon.")
         else:
-            print(result.stderr)
+            print(getattr(result, "stderr", ""))
         pause()
         return
 
@@ -338,10 +435,10 @@ def start_vps():
         return
 
     print(f"\n▶️ Starting {name}...")
-    res = safe_run(["docker", "start", name])
+    res = safe_run(get_container_cmd("start", name))
     if res.returncode != 0:
         print("❌ Failed to start:")
-        print(res.stderr)
+        print(getattr(res, "stderr", ""))
     else:
         print("✅ Done.")
     pause()
@@ -359,10 +456,10 @@ def stop_vps():
         return
 
     print(f"\n⏹️ Stopping {name}...")
-    res = safe_run(["docker", "stop", name])
+    res = safe_run(get_container_cmd("stop", name))
     if res.returncode != 0:
         print("❌ Failed to stop:")
-        print(res.stderr)
+        print(getattr(res, "stderr", ""))
     else:
         print("✅ Done.")
     pause()
@@ -380,10 +477,10 @@ def restart_vps():
         return
 
     print(f"\n🔄 Restarting {name}...")
-    res = safe_run(["docker", "restart", name])
+    res = safe_run(get_container_cmd("restart", name))
     if res.returncode != 0:
         print("❌ Failed to restart:")
-        print(res.stderr)
+        print(getattr(res, "stderr", ""))
     else:
         print("✅ Done.")
     pause()
@@ -417,20 +514,13 @@ Disk       : {data.get('disk')} GB
 Created    : {data.get('created')}
 """)
 
-    if docker_available():
+    if backend_available():
         print("📊 Docker stats:\n")
-        res = safe_run([
-            "docker",
-            "stats",
-            name,
-            "--no-stream",
-            "--format",
-            "CPU: {{.CPUPerc}} | RAM: {{.MemUsage}}",
-        ])
+        res = safe_run(get_container_cmd("stats", name, "--no-stream", "--format", "CPU: {{.CPUPerc}} | RAM: {{.MemUsage}}"))
         if res.returncode == 0:
-            print(res.stdout)
+            print(getattr(res, "stdout", ""))
         else:
-            print(res.stderr)
+            print(getattr(res, "stderr", ""))
 
     pause()
 
@@ -460,11 +550,11 @@ def rename_vps():
         pause()
         return
 
-    result = safe_run(["docker", "rename", old_name, new_name])
+    result = safe_run(get_container_cmd("rename", old_name, new_name))
 
     if result.returncode != 0:
         print("❌ Rename failed.")
-        print(result.stderr)
+        print(getattr(result, "stderr", ""))
         pause()
         return
 
@@ -502,11 +592,11 @@ def change_ram():
         return
 
     # Docker resource update
-    result = safe_run(["docker", "update", "--memory", f"{new_ram}m", name])
+    result = safe_run(get_container_cmd("update", "--memory", f"{new_ram}m", name))
 
     if result.returncode != 0:
         print("❌ Failed to change RAM.")
-        print(result.stderr)
+        print(getattr(result, "stderr", ""))
         pause()
         return
 
@@ -544,11 +634,11 @@ def change_cpu():
         pause()
         return
 
-    result = safe_run(["docker", "update", "--cpus", str(new_cpu), name])
+    result = safe_run(get_container_cmd("update", "--cpus", str(new_cpu), name))
 
     if result.returncode != 0:
         print("❌ Failed to change CPU.")
-        print(result.stderr)
+        print(getattr(result, "stderr", ""))
         pause()
         return
 
@@ -621,10 +711,10 @@ def delete_vps():
         pause()
         return
 
-    res = safe_run(["docker", "rm", "-f", name])
+    res = safe_run(get_container_cmd("rm", "-f", name))
     if res.returncode != 0:
         print("❌ Failed to delete:")
-        print(res.stderr)
+        print(getattr(res, "stderr", ""))
     else:
         vps = load_vps()
         if name in vps:
@@ -772,7 +862,7 @@ def system_info():
         pass
 
     print(f"\nPython: {os.sys.version.split()[0]}")
-    print(f"Docker: {'Installed' if docker_available() else 'Not installed'}")
+    print(f"Container backend: {detect_backend() or 'none detected'}")
 
     pause()
 
