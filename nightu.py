@@ -1,888 +1,113 @@
 import os
 import json
-import hashlib
-import getpass
+import shutil
 import subprocess
 import time
 import re
+from pathlib import Path
 
-VERSION = "1.0.0"
-DATA_FILE = os.path.expanduser("~/.nightu_vps.json")
-
-
-# ============================================================
-# COLORS
-# ============================================================
-
-RESET = "\033[0m"
-PURPLE = "\033[95m"
-CYAN = "\033[96m"
-GREEN = "\033[92m"
-RED = "\033[91m"
-YELLOW = "\033[93m"
-WHITE = "\033[97m"
-GRAY = "\033[90m"
+VERSION = "1.2.0"
+DATA_FILE_NAME = "nightu_vps.json"
+APP_NAME = "nightu"
 
 
-# ============================================================
-# BASIC
-# ============================================================
+# =========================
+# BASIC FUNCTIONS
+# =========================
+
 
 def clear():
-    os.system("clear")
+    os.system("clear" if os.name != "nt" else "cls")
 
 
 def pause():
-    input(f"\n{GRAY}Press ENTER...{RESET}")
-
-
-def run(command):
-    return subprocess.run(
-        command,
-        shell=True,
-        text=True,
-        capture_output=True
-    )
-
-
-def command_exists(command):
-    return subprocess.call(
-        f"command -v {command} >/dev/null 2>&1",
-        shell=True
-    ) == 0
-
-
-# ============================================================
-# DATA
-# ============================================================
-
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {"vps": {}}
-
     try:
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return {"vps": {}}
+        input("\nPress ENTER to continue...")
+    except EOFError:
+        # Non-interactive environment
+        pass
 
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-
-
-# ============================================================
-# PASSWORD
-# ============================================================
-
-def hash_password(password):
-    return hashlib.sha256(
-        password.encode()
-    ).hexdigest()
-
-
-def verify_password(password, password_hash):
-    return hash_password(password) == password_hash
-
-
-# ============================================================
-# BANNER
-# ============================================================
-
-def banner():
-    print(PURPLE + r"""
-╔══════════════════════════════════════════════╗
-║                                              ║
-║          🌙 VPS-MAKER-NIGHTU                ║
-║                  v1.0                        ║
-║                                              ║
-║             VPS MANAGEMENT                   ║
-║                BY NIGHTU                     ║
-║                                              ║
-╚══════════════════════════════════════════════╝
-""" + RESET)
-
-
-# ============================================================
-# PROOT
-# ============================================================
-
-def proot_installed():
-    return command_exists("proot-distro")
-
-
-def check_proot():
-    if not proot_installed():
-        print(RED + """
-❌ proot-distro nu este instalat.
-
-Instalează-l cu:
-
-pkg update -y
-pkg install proot-distro -y
-""" + RESET)
-
-        pause()
-        return False
-
-    return True
-
-
-# ============================================================
-# NAME VALIDATION
-# ============================================================
-
-def clean_name(name):
-    name = name.strip()
-
-    name = re.sub(
-        r"[^a-zA-Z0-9_-]",
-        "",
-        name
-    )
-
-    return name[:30]
-
-
-# ============================================================
-# CREATE ID
-# ============================================================
-
-def generate_id():
-    data = load_data()
-
-    number = 1
-
-    while True:
-        vps_id = f"nightu-vps-{number}"
-
-        if vps_id not in data["vps"]:
-            return vps_id
-
-        number += 1
-
-
-# ============================================================
-# CREATE VPS
-# ============================================================
-
-def create_vps():
-
-    clear()
-    banner()
-
-    if not check_proot():
-        return
-
-    data = load_data()
-
-    print(CYAN + "➕ CREATE VPS\n" + RESET)
-
-    name = input("🌙 VPS Name: ")
-    name = clean_name(name)
-
-    if not name:
-        print(RED + "❌ Nume invalid." + RESET)
-        pause()
-        return
-
-    # Check duplicate display names
-    for vps in data["vps"].values():
-        if vps["name"].lower() == name.lower():
-            print(RED + "❌ Acest nume este deja folosit." + RESET)
-            pause()
-            return
-
-    print("""
-🖥️ Select OS:
-
-1. Ubuntu
-2. Debian
-3. Alpine
-""")
-
-    choice = input("OS > ").strip()
-
-    systems = {
-        "1": "ubuntu",
-        "2": "debian",
-        "3": "alpine"
-    }
-
-    if choice not in systems:
-        print(RED + "❌ OS invalid." + RESET)
-        pause()
-        return
-
-    os_name = systems[choice]
-
-    username = input(
-        "\n👤 Username [nightu]: "
-    ).strip()
-
-    if not username:
-        username = "nightu"
-
-    username = clean_name(username)
-
-    if not username:
-        print(RED + "❌ Username invalid." + RESET)
-        pause()
-        return
-
-    password = getpass.getpass(
-        "🔐 Password: "
-    )
-
-    password2 = getpass.getpass(
-        "🔐 Confirm password: "
-    )
-
-    if not password:
-        print(RED + "❌ Password-ul nu poate fi gol." + RESET)
-        pause()
-        return
-
-    if password != password2:
-        print(RED + "❌ Parolele nu coincid." + RESET)
-        pause()
-        return
-
-    print()
-    print(PURPLE + "🌙 Creating VPS..." + RESET)
-
-    vps_id = generate_id()
-
-    command = (
-        f"proot-distro install "
-        f"--override-alias {vps_id} {os_name}"
-    )
-
-    result = subprocess.run(
-        command,
-        shell=True
-    )
-
-    if result.returncode != 0:
-        print(RED + "\n❌ VPS creation failed." + RESET)
-        pause()
-        return
-
-    # Save VPS
-    data["vps"][vps_id] = {
-        "name": name,
-        "os": os_name,
-        "username": username,
-        "password_hash": hash_password(password),
-        "ram": 2048,
-        "cpu": 2,
-        "disk": 10,
-        "created": time.strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
-    }
-
-    save_data(data)
-
-    print(GREEN + """
-╔════════════════════════════════════╗
-║       ✅ VPS CREATED!              ║
-╚════════════════════════════════════╝
-""" + RESET)
-
-    print(f"🌙 Name     : {name}")
-    print(f"🆔 ID       : {vps_id}")
-    print(f"🖥️ OS       : {os_name}")
-    print(f"👤 Username : {username}")
-    print("🔐 Password : saved securely")
-    print("👑 Access   : ROOT")
-
-    pause()
-
-
-# ============================================================
-# SELECT VPS
-# ============================================================
-
-def select_vps():
-
-    data = load_data()
-
-    if not data["vps"]:
-        print(YELLOW + "📭 Nu există VPS-uri." + RESET)
-        pause()
-        return None
-
-    items = list(data["vps"].items())
-
-    print()
-
-    for i, (vps_id, info) in enumerate(items, 1):
-        print(
-            f"{i}. 🌙 {info['name']} "
-            f"({vps_id})"
-        )
-
-    choice = input(
-        "\n🌙 Select VPS > "
-    ).strip()
-
-    try:
-        index = int(choice) - 1
-
-        if index < 0 or index >= len(items):
-            raise ValueError
-
-        return items[index][0]
-
-    except:
-        print(RED + "❌ Selecție invalidă." + RESET)
-        pause()
-        return None
-
-
-# ============================================================
-# LOGIN
-# ============================================================
-
-def login_vps(vps_id):
-
-    data = load_data()
-
-    if vps_id not in data["vps"]:
-        return False
-
-    info = data["vps"][vps_id]
-
-    clear()
-
-    print(PURPLE + r"""
-╔══════════════════════════════════════════════╗
-║                                              ║
-║              🌙 NIGHTU LOGIN                 ║
-║                                              ║
-╚══════════════════════════════════════════════╝
-""" + RESET)
-
-    print(
-        f"\n🖥️ VPS: {WHITE}{info['name']}{RESET}\n"
-    )
-
-    username = input(
-        "👤 Username: "
-    ).strip()
-
-    password = getpass.getpass(
-        "🔐 Password: "
-    )
-
-    if username != info["username"]:
-        print(RED + "\n❌ Username incorrect." + RESET)
-        time.sleep(2)
-        return False
-
-    if not verify_password(
-        password,
-        info["password_hash"]
-    ):
-        print(RED + "\n❌ Password incorrect." + RESET)
-        time.sleep(2)
-        return False
-
-    print(
-        GREEN +
-        "\n✅ Login successful!"
-        + RESET
-    )
-
-    time.sleep(1)
-
-    return True
-
-
-# ============================================================
-# START VPS
-# ============================================================
-
-def start_vps():
-
-    clear()
-    banner()
-
-    if not check_proot():
-        return
-
-    data = load_data()
-
-    vps_id = select_vps()
-
-    if not vps_id:
-        return
-
-    info = data["vps"][vps_id]
-
-    # Login screen first
-    if not login_vps(vps_id):
-        pause()
-        return
-
-    clear()
-
-    print(
-        GREEN +
-        f"""
-╔══════════════════════════════════════════════╗
-║                                              ║
-║       🟢 {info['name']:^32} ║
-║                                              ║
-║       👑 ROOT ACCESS GRANTED                ║
-║                                              ║
-╚══════════════════════════════════════════════╝
-"""
-        + RESET
-    )
-
-    print(
-        f"{GRAY}Connecting to Linux environment...{RESET}\n"
-    )
-
-    time.sleep(1)
-
-    # Enter PRoot environment
-    subprocess.run(
-        f"proot-distro login {vps_id} "
-        f"-- /bin/bash -c "
-        f"'export VPS_NAME=\"{info['name']}\"; "
-        f"export VPS_USER=\"{info['username']}\"; "
-        f"echo \"\"; "
-        f"echo \"
 def command_exists(command):
     return shutil.which(command) is not None
 
 
-def run(command):
-    return subprocess.run(
-        command,
-        shell=True,
-        text=True,
-        capture_output=True
-    )
+def safe_run(cmd_list, capture_output=True):
+    """Run a command given as a list (no shell). Returns CompletedProcess.
 
-
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {"vps": {}}
-
+    Always use list form to avoid shell injection.
+    """
     try:
-        with open(DATA_FILE, "r") as file:
-            data = json.load(file)
-
-        if "vps" not in data:
-            data["vps"] = {}
-
-        return data
-
-    except Exception:
-        return {"vps": {}}
-
-
-def save_data(data):
-    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
-
-    with open(DATA_FILE, "w") as file:
-        json.dump(data, file, indent=4)
-
-
-# ============================================================
-# BANNER
-# ============================================================
-
-def banner():
-    print(PURPLE + r"""
-╔══════════════════════════════════════════════╗
-║                                              ║
-║          🌙 NIGHTU VPS MAKER                 ║
-║                v1.0.0                        ║
-║                                              ║
-║              VPS MANAGEMENT                  ║
-║                 BY NIGHTU                    ║
-║                                              ║
-╚══════════════════════════════════════════════╝
-""" + RESET)
-
-
-# ============================================================
-# ENVIRONMENT
-# ============================================================
-
-def detect_environment():
-    if "com.termux" in os.environ.get("PREFIX", ""):
-        return "TERMUX"
-
-    if os.path.exists("/data/data/com.termux"):
-        return "TERMUX"
-
-    if command_exists("docker"):
-        return "LINUX + DOCKER"
-
-    return "LINUX"
-
-
-# ============================================================
-# PROOT CHECK
-# ============================================================
-
-def check_proot():
-    if not command_exists("proot-distro"):
-        print(RED + "❌ proot-distro nu este instalat." + RESET)
-        print()
-        print("Instalează-l cu:")
-        print("pkg update -y")
-        print("pkg install proot-distro -y")
-        pause()
-        return False
-
-    return True
-
-
-# ============================================================
-# VPS ID
-# ============================================================
-
-def make_id():
-    data = load_data()
-
-    number = 1
-
-    while True:
-        vps_id = f"nightu-vps-{number}"
-
-        if vps_id not in data["vps"]:
-            return vps_id
-
-        number += 1
-
-
-# ============================================================
-# VALID NAME
-# ============================================================
-
-def clean_name(name):
-    name = name.strip()
-
-    name = re.sub(
-        r"[^a-zA-Z0-9 _-]",
-        "",
-        name
-    )
-
-    return name[:32]
-
-
-# ============================================================
-# VPS STATUS
-# ============================================================
-
-def get_status(vps_id):
-    if not check_proot_quiet():
-        return "UNKNOWN"
-
-    result = run("proot-distro ps")
-
-    if result.returncode != 0:
-        return "UNKNOWN"
-
-    output = result.stdout.lower()
-
-    if vps_id.lower() in output:
-        return "🟢 RUNNING"
-
-    return "⚪ STOPPED"
-
-
-def check_proot_quiet():
-    return command_exists("proot-distro")
-
-
-# ============================================================
-# CREATE VPS
-# ============================================================
-
-def create_vps():
-    clear()
-    banner()
-
-    if not check_proot():
-        return
-
-    data = load_data()
-
-    print(CYAN + "➕ CREATE NEW VPS\n" + RESET)
-
-    name = input("🌙 VPS Name: ")
-    name = clean_name(name)
-
-    if not name:
-        print(RED + "❌ Nume invalid." + RESET)
-        pause()
-        return
-
-    print("""
-Alege sistemul:
-
-1. Ubuntu
-2. Debian
-3. Alpine
-""")
-
-    choice = input("🖥️ OS > ").strip()
-
-    systems = {
-        "1": "ubuntu",
-        "2": "debian",
-        "3": "alpine"
-    }
-
-    if choice not in systems:
-        print(RED + "❌ OS invalid." + RESET)
-        pause()
-        return
-
-    image = systems[choice]
-
-    ram = input("🧠 RAM profil [2048 MB]: ").strip() or "2048"
-    cpu = input("⚡ CPU profil [2 cores]: ").strip() or "2"
-    disk = input("💾 Disk profil [10 GB]: ").strip() or "10"
-
-    try:
-        ram = int(ram)
-        cpu = int(cpu)
-        disk = int(disk)
-
-        if ram <= 0 or cpu <= 0 or disk <= 0:
-            raise ValueError
-
-    except ValueError:
-        print(RED + "❌ Resurse invalide." + RESET)
-        pause()
-        return
-
-    vps_id = make_id()
-
-    print()
-    print(PURPLE + "🌙 Creating VPS..." + RESET)
-    print(f"ID: {vps_id}")
-    print(f"OS: {image}")
-
-    command = (
-        f"proot-distro install "
-        f"--override-alias {vps_id} {image}"
-    )
-
-    result = subprocess.run(
-        command,
-        shell=True
-    )
-
-    if result.returncode != 0:
-        print(RED + "\n❌ VPS creation failed." + RESET)
-        pause()
-        return
-
-    data["vps"][vps_id] = {
-        "name": name,
-        "os": image,
-        "ram": ram,
-        "cpu": cpu,
-        "disk": disk,
-        "created": time.strftime(
-            "%Y-%m-%d %H:%M:%S"
+        return subprocess.run(
+            cmd_list,
+            check=False,
+            capture_output=capture_output,
+            text=True,
         )
-    }
+    except Exception as e:
+        # Return a simple object-like structure with returncode and stderr
+        class R:
+            pass
 
-    save_data(data)
-
-    print()
-    print(GREEN + "╔════════════════════════════════════╗")
-    print("║       ✅ VPS CREATED!              ║")
-    print("╚════════════════════════════════════╝" + RESET)
-
-    print(f"\n🌙 Name : {name}")
-    print(f"🆔 ID   : {vps_id}")
-    print(f"🖥️ OS   : {image}")
-    print(f"🧠 RAM  : {ram} MB")
-    print(f"⚡ CPU  : {cpu} cores")
-    print(f"💾 Disk : {disk} GB")
-
-    pause()
+        r = R()
+        r.returncode = 1
+        r.stdout = ""
+        r.stderr = str(e)
+        return r
 
 
-# ============================================================
-# LIST VPS
-# ============================================================
+def get_data_file_path():
+    """Determine preferred data file location.
 
-def list_vps():
-    clear()
-    banner()
+    Priority:
+      1. If DATA_FILE exists in cwd (backwards compatibility) use it.
+      2. Use XDG_CONFIG_HOME or ~/.config/<APP_NAME>/DATA_FILE_NAME
+    """
+    cwd_path = Path(DATA_FILE_NAME)
+    if cwd_path.exists():
+        return cwd_path
 
-    data = load_data()
-
-    if not data["vps"]:
-        print(YELLOW + "📭 Nu există VPS-uri." + RESET)
-        pause()
-        return
-
-    print(CYAN + "📋 YOUR VPS SERVERS\n" + RESET)
-
-    for number, (vps_id, info) in enumerate(
-        data["vps"].items(),
-        1
-    ):
-        status = get_status(vps_id)
-
-        print(
-            f"{PURPLE}{number}.{RESET} "
-            f"{WHITE}{info['name']}{RESET}"
-        )
-
-        print(f"   ID     : {vps_id}")
-        print(f"   Status : {status}")
-        print(f"   OS     : {info['os']}")
-        print(f"   CPU    : {info['cpu']} cores")
-        print(f"   RAM    : {info['ram']} MB")
-        print(f"   Disk   : {info['disk']} GB")
-        print()
-
-    pause()
-
-
-# ============================================================
-# SELECT VPS
-# ============================================================
-
-def select_vps():
-    data = load_data()
-
-    if not data["vps"]:
-        print(YELLOW + "📭 Nu există VPS-uri." + RESET)
-        pause()
-        return None
-
-    items = list(data["vps"].items())
-
-    print()
-
-    for i, (vps_id, info) in enumerate(items, 1):
-        print(
-            f"{i}. {info['name']} "
-            f"({vps_id})"
-        )
-
-    choice = input("\n🌙 Select VPS > ").strip()
-
-    try:
-        index = int(choice) - 1
-
-        if index < 0 or index >= len(items):
-            raise ValueError
-
-        return items[index][0]
-
-    except ValueError:
-        print(RED + "❌ Selecție invalidă." + RESET)
-        pause()
-        return None
-
-
-# ============================================================
-# START VPS
-# ============================================================
-
-def start_vps():
-    clear()
-    banner()
-
-    if not check_proot():
-        return
-
-    data = load_data()
-
-    vps_id = select_vps()
-
-    if not vps_id:
-        return
-
-    info = data["vps"][vps_id]
-
-    clear()
-    banner()
-
-    print(
-        f"▶️ Pornesc {WHITE}{info['name']}{RESET}...\n"
-    )
-
-    print(
-        GRAY +
-        "Pentru PRoot, 'Start' deschide o sesiune Linux."
-        + RESET
-    )
-
-    print()
-
-    subprocess.run(
-        f"proot-distro login {vps_id}",
-        shell=True
-    )
-
-
-# ============================================================
-# STOP VPS
-# ============================================================
-
-def stop_vps():
-    clear()
-    banner()
-
-    if not check_proot():
-        return
-
-    print(CYAN + "⏹️ STOP VPS\n" + RESET)
-
-    print(
-        "PRoot nu este o VM clasică.\n"
-        "Nightu poate opri sesiunile PRoot active.\n"
-    )
-
-    result = run("proot-distro ps")
-
-    if result.stdout.strip():
-        print(result.stdout)
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        config_dir = Path(xdg) / APP_NAME
     else:
-        print("Nu există sesiuni active.")
+        config_dir = Path.home() / ".config" / APP_NAME
 
-    print()
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir / DATA_FILE_NAME
 
-    pid = input(
-        "PID-ul sesiunii de oprit "
-        "(ENTER pentru anulare): "
-    ).strip()
 
-    if not pid:
-        return
+DATA_FILE = str(get_data_file_path())
 
-    if not pid.isdigit():
-        print(RED
+
+def load_vps():
+    path = Path(DATA_FILE)
+    if not path.exists():
+        return {}
+
     try:
-        with open(DATA_FILE, "r") as f:
+        with path.open("r", encoding="utf-8") as f:
             return json.load(f)
-    except:
+    except json.JSONDecodeError:
+        # Backup corrupt file
+        backup = path.with_suffix(".json.corrupt")
+        path.replace(backup)
+        print(f"⚠️ Warning: Corrupt data file moved to {backup}")
+        return {}
+    except Exception as e:
+        print(f"Error reading data file: {e}")
         return {}
 
 
 def save_vps(vps):
-    with open(DATA_FILE, "w") as f:
-        json.dump(vps, f, indent=4)
+    path = Path(DATA_FILE)
+    tmp = path.with_suffix(".tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(vps, f, indent=4)
+        tmp.replace(path)
+    except Exception as e:
+        print(f"Error saving data file: {e}")
 
 
 def docker_available():
@@ -892,6 +117,7 @@ def docker_available():
 # =========================
 # UI
 # =========================
+
 
 def banner():
     print(r"""
@@ -904,8 +130,37 @@ def banner():
 
 
 # =========================
+# Helpers
+# =========================
+
+
+def validate_name(name):
+    """Validate container name against a safe pattern.
+
+    Docker allows letters, digits, underscores, periods and dashes.
+    We require at least one alphanumeric character and limit length to 128.
+    """
+    if not name or len(name) > 128:
+        return False
+    return re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$", name) is not None
+
+
+def docker_permission_check(stderr_text):
+    """Return True if stderr indicates permission problem."""
+    if not stderr_text:
+        return False
+    low = stderr_text.lower()
+    return (
+        "permission denied" in low
+        or "cannot connect to the docker daemon" in low
+        or "got permission denied" in low
+    )
+
+
+# =========================
 # VPS LIST
 # =========================
+
 
 def list_vps():
     clear()
@@ -925,9 +180,9 @@ def list_vps():
 
         print(f"🌙 {name}")
         print(f"   Status : {status}")
-        print(f"   CPU    : {data['cpu']} cores")
-        print(f"   RAM    : {data['ram']} MB")
-        print(f"   Disk   : {data['disk']} GB")
+        print(f"   CPU    : {data.get('cpu')} cores")
+        print(f"   RAM    : {data.get('ram')} MB")
+        print(f"   Disk   : {data.get('disk')} GB")
         print()
 
 
@@ -935,18 +190,20 @@ def list_vps():
 # STATUS
 # =========================
 
+
 def get_status(name):
     if not docker_available():
         return "⚪ Docker unavailable"
 
-    result = subprocess.run(
-        f"docker inspect -f '{{{{.State.Status}}}}' '{name}'",
-        shell=True,
-        capture_output=True,
-        text=True
-    )
+    result = safe_run(["docker", "inspect", "-f", "{{.State.Status}}", name])
 
-    status = result.stdout.strip()
+    if result.returncode != 0:
+        # If stderr suggests permission issue, show helpful message
+        if docker_permission_check(result.stderr):
+            return "⚪ Docker permission error"
+        return "⚪ NOT FOUND"
+
+    status = (result.stdout or "").strip()
 
     if status == "running":
         return "🟢 RUNNING"
@@ -961,6 +218,7 @@ def get_status(name):
 # =========================
 # CREATE VPS
 # =========================
+
 
 def create_vps():
     clear()
@@ -978,8 +236,8 @@ def create_vps():
 
     name = input("VPS name: ").strip()
 
-    if not name:
-        print("❌ Invalid name.")
+    if not validate_name(name):
+        print("❌ Invalid name. Use letters, numbers, dashes, underscores or dots.")
         pause()
         return
 
@@ -1007,27 +265,46 @@ def create_vps():
 
     print("\n🌙 Creating VPS...")
 
-    # Ubuntu container
-    command = (
-        f"docker run -d "
-        f"--name '{name}' "
-        f"--memory '{ram}m' "
-        f"--cpus '{cpu}' "
-        f"--hostname '{name}' "
-        f"ubuntu:24.04 "
-        f"sleep infinity"
-    )
+    image = "ubuntu:24.04"
 
-    result = subprocess.run(
-        command,
-        shell=True,
-        capture_output=True,
-        text=True
-    )
+    # Ensure image is available (pull if needed)
+    print(f"📥 Pulling image {image} (this may take a while)...")
+    pull = safe_run(["docker", "pull", image])
+    if pull.returncode != 0:
+        if docker_permission_check(pull.stderr):
+            print("❌ Docker permission error while pulling image. Try running with appropriate privileges.")
+        else:
+            print("❌ Failed to pull image:")
+            print(pull.stderr)
+        pause()
+        return
+
+    # Run container without shell to avoid injection
+    cmd = [
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        name,
+        "--memory",
+        f"{ram}m",
+        "--cpus",
+        str(cpu),
+        "--hostname",
+        name,
+        image,
+        "sleep",
+        "infinity",
+    ]
+
+    result = safe_run(cmd)
 
     if result.returncode != 0:
         print("\n❌ Failed to create VPS.")
-        print(result.stderr)
+        if docker_permission_check(result.stderr):
+            print("❌ Docker permission error. Make sure your user can access the Docker daemon.")
+        else:
+            print(result.stderr)
         pause()
         return
 
@@ -1035,7 +312,7 @@ def create_vps():
         "ram": ram,
         "cpu": cpu,
         "disk": disk,
-        "created": time.strftime("%Y-%m-%d %H:%M:%S")
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
     save_vps(vps)
@@ -1053,6 +330,7 @@ def create_vps():
 # START
 # =========================
 
+
 def start_vps():
     name = select_vps()
 
@@ -1060,14 +338,19 @@ def start_vps():
         return
 
     print(f"\n▶️ Starting {name}...")
-    run(f"docker start '{name}'")
-    print("✅ Done.")
+    res = safe_run(["docker", "start", name])
+    if res.returncode != 0:
+        print("❌ Failed to start:")
+        print(res.stderr)
+    else:
+        print("✅ Done.")
     pause()
 
 
 # =========================
 # STOP
 # =========================
+
 
 def stop_vps():
     name = select_vps()
@@ -1076,14 +359,19 @@ def stop_vps():
         return
 
     print(f"\n⏹️ Stopping {name}...")
-    run(f"docker stop '{name}'")
-    print("✅ Done.")
+    res = safe_run(["docker", "stop", name])
+    if res.returncode != 0:
+        print("❌ Failed to stop:")
+        print(res.stderr)
+    else:
+        print("✅ Done.")
     pause()
 
 
 # =========================
 # RESTART
 # =========================
+
 
 def restart_vps():
     name = select_vps()
@@ -1092,14 +380,19 @@ def restart_vps():
         return
 
     print(f"\n🔄 Restarting {name}...")
-    run(f"docker restart '{name}'")
-    print("✅ Done.")
+    res = safe_run(["docker", "restart", name])
+    if res.returncode != 0:
+        print("❌ Failed to restart:")
+        print(res.stderr)
+    else:
+        print("✅ Done.")
     pause()
 
 
 # =========================
 # INFO
 # =========================
+
 
 def vps_info():
     name = select_vps()
@@ -1108,7 +401,7 @@ def vps_info():
         return
 
     vps = load_vps()
-    data = vps[name]
+    data = vps.get(name, {})
 
     clear()
     banner()
@@ -1118,18 +411,26 @@ def vps_info():
 
 Name       : {name}
 Status     : {get_status(name)}
-CPU        : {data['cpu']} cores
-RAM        : {data['ram']} MB
-Disk       : {data['disk']} GB
-Created    : {data['created']}
+CPU        : {data.get('cpu')} cores
+RAM        : {data.get('ram')} MB
+Disk       : {data.get('disk')} GB
+Created    : {data.get('created')}
 """)
 
     if docker_available():
         print("📊 Docker stats:\n")
-        run(
-            f"docker stats '{name}' --no-stream "
-            "--format 'CPU: {{.CPUPerc}} | RAM: {{.MemUsage}}'"
-        )
+        res = safe_run([
+            "docker",
+            "stats",
+            name,
+            "--no-stream",
+            "--format",
+            "CPU: {{.CPUPerc}} | RAM: {{.MemUsage}}",
+        ])
+        if res.returncode == 0:
+            print(res.stdout)
+        else:
+            print(res.stderr)
 
     pause()
 
@@ -1137,6 +438,7 @@ Created    : {data['created']}
 # =========================
 # RENAME
 # =========================
+
 
 def rename_vps():
     old_name = select_vps()
@@ -1148,7 +450,7 @@ def rename_vps():
 
     new_name = input("New VPS name: ").strip()
 
-    if not new_name:
+    if not validate_name(new_name):
         print("❌ Invalid name.")
         pause()
         return
@@ -1158,12 +460,7 @@ def rename_vps():
         pause()
         return
 
-    result = subprocess.run(
-        f"docker rename '{old_name}' '{new_name}'",
-        shell=True,
-        capture_output=True,
-        text=True
-    )
+    result = safe_run(["docker", "rename", old_name, new_name])
 
     if result.returncode != 0:
         print("❌ Rename failed.")
@@ -1181,6 +478,7 @@ def rename_vps():
 # =========================
 # CHANGE RAM
 # =========================
+
 
 def change_ram():
     name = select_vps()
@@ -1204,12 +502,7 @@ def change_ram():
         return
 
     # Docker resource update
-    result = subprocess.run(
-        f"docker update --memory '{new_ram}m' '{name}'",
-        shell=True,
-        capture_output=True,
-        text=True
-    )
+    result = safe_run(["docker", "update", "--memory", f"{new_ram}m", name])
 
     if result.returncode != 0:
         print("❌ Failed to change RAM.")
@@ -1217,8 +510,9 @@ def change_ram():
         pause()
         return
 
-    vps[name]["ram"] = new_ram
-    save_vps(vps)
+    if name in vps:
+        vps[name]["ram"] = new_ram
+        save_vps(vps)
 
     print(f"✅ RAM changed to {new_ram} MB.")
     pause()
@@ -1227,6 +521,7 @@ def change_ram():
 # =========================
 # CHANGE CPU
 # =========================
+
 
 def change_cpu():
     name = select_vps()
@@ -1249,12 +544,7 @@ def change_cpu():
         pause()
         return
 
-    result = subprocess.run(
-        f"docker update --cpus '{new_cpu}' '{name}'",
-        shell=True,
-        capture_output=True,
-        text=True
-    )
+    result = safe_run(["docker", "update", "--cpus", str(new_cpu), name])
 
     if result.returncode != 0:
         print("❌ Failed to change CPU.")
@@ -1262,8 +552,9 @@ def change_cpu():
         pause()
         return
 
-    vps[name]["cpu"] = new_cpu
-    save_vps(vps)
+    if name in vps:
+        vps[name]["cpu"] = new_cpu
+        save_vps(vps)
 
     print(f"✅ CPU changed to {new_cpu} cores.")
     pause()
@@ -1272,6 +563,7 @@ def change_cpu():
 # =========================
 # CHANGE DISK
 # =========================
+
 
 def change_disk():
     name = select_vps()
@@ -1301,8 +593,9 @@ Actual filesystem expansion will be added in a future version.
         pause()
         return
 
-    vps[name]["disk"] = new_disk
-    save_vps(vps)
+    if name in vps:
+        vps[name]["disk"] = new_disk
+        save_vps(vps)
 
     print(f"✅ Disk configuration changed to {new_disk} GB.")
     pause()
@@ -1311,6 +604,7 @@ Actual filesystem expansion will be added in a future version.
 # =========================
 # DELETE
 # =========================
+
 
 def delete_vps():
     name = select_vps()
@@ -1327,22 +621,24 @@ def delete_vps():
         pause()
         return
 
-    run(f"docker rm -f '{name}'")
+    res = safe_run(["docker", "rm", "-f", name])
+    if res.returncode != 0:
+        print("❌ Failed to delete:")
+        print(res.stderr)
+    else:
+        vps = load_vps()
+        if name in vps:
+            del vps[name]
+            save_vps(vps)
+        print("🗑️ VPS deleted.")
 
-    vps = load_vps()
-
-    if name in vps:
-        del vps[name]
-
-    save_vps(vps)
-
-    print("🗑️ VPS deleted.")
     pause()
 
 
 # =========================
 # SELECT VPS
 # =========================
+
 
 def select_vps():
     vps = load_vps()
@@ -1378,6 +674,7 @@ def select_vps():
 # =========================
 # VPS MANAGER
 # =========================
+
 
 def vps_manager():
     while True:
@@ -1453,13 +750,16 @@ def vps_manager():
 # SYSTEM INFO
 # =========================
 
+
 def system_info():
     clear()
     banner()
 
     print("🖥️ SYSTEM INFORMATION\n")
 
-    run("uname -a")
+    res = safe_run(["uname", "-a"]) if shutil.which("uname") else None
+    if res and res.returncode == 0:
+        print(res.stdout)
     print()
 
     print(f"CPU cores: {os.cpu_count()}")
@@ -1468,7 +768,7 @@ def system_info():
         total, used, free = shutil.disk_usage("/")
         print(f"Disk total: {total // (1024**3)} GB")
         print(f"Disk free : {free // (1024**3)} GB")
-    except:
+    except Exception:
         pass
 
     print(f"\nPython: {os.sys.version.split()[0]}")
@@ -1480,6 +780,7 @@ def system_info():
 # =========================
 # MAIN
 # =========================
+
 
 def main():
     while True:
