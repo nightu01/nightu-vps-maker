@@ -1,23 +1,38 @@
 import os
 import json
+import re
 import shutil
 import subprocess
 import time
 
-VERSION = "1.2.0"
-DATA_FILE = "nightu_vps.json"
+VERSION = "2.0.0"
+DATA_FILE = os.path.expanduser("~/.nightu_vps.json")
 
 
-# =========================
-# BASIC FUNCTIONS
-# =========================
+# ============================================================
+# COLORS
+# ============================================================
+
+RESET = "\033[0m"
+CYAN = "\033[96m"
+PURPLE = "\033[95m"
+GREEN = "\033[92m"
+RED = "\033[91m"
+YELLOW = "\033[93m"
+WHITE = "\033[97m"
+GRAY = "\033[90m"
+
+
+# ============================================================
+# BASIC
+# ============================================================
 
 def clear():
-    os.system("clear" if os.name != "nt" else "cls")
+    os.system("clear")
 
 
 def pause():
-    input("\nPress ENTER to continue...")
+    input(f"\n{GRAY}Apasă ENTER pentru a continua...{RESET}")
 
 
 def command_exists(command):
@@ -25,16 +40,417 @@ def command_exists(command):
 
 
 def run(command):
-    try:
-        subprocess.run(command, shell=True, check=False)
-    except Exception as e:
-        print(f"Error: {e}")
+    return subprocess.run(
+        command,
+        shell=True,
+        text=True,
+        capture_output=True
+    )
 
 
-def load_vps():
+def load_data():
     if not os.path.exists(DATA_FILE):
-        return {}
+        return {"vps": {}}
 
+    try:
+        with open(DATA_FILE, "r") as file:
+            data = json.load(file)
+
+        if "vps" not in data:
+            data["vps"] = {}
+
+        return data
+
+    except Exception:
+        return {"vps": {}}
+
+
+def save_data(data):
+    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
+
+    with open(DATA_FILE, "w") as file:
+        json.dump(data, file, indent=4)
+
+
+# ============================================================
+# BANNER
+# ============================================================
+
+def banner():
+    print(PURPLE + r"""
+╔══════════════════════════════════════════════╗
+║                                              ║
+║          🌙 NIGHTU VPS MAKER                 ║
+║                v1.0.0                        ║
+║                                              ║
+║              VPS MANAGEMENT                  ║
+║                 BY NIGHTU                    ║
+║                                              ║
+╚══════════════════════════════════════════════╝
+""" + RESET)
+
+
+# ============================================================
+# ENVIRONMENT
+# ============================================================
+
+def detect_environment():
+    if "com.termux" in os.environ.get("PREFIX", ""):
+        return "TERMUX"
+
+    if os.path.exists("/data/data/com.termux"):
+        return "TERMUX"
+
+    if command_exists("docker"):
+        return "LINUX + DOCKER"
+
+    return "LINUX"
+
+
+# ============================================================
+# PROOT CHECK
+# ============================================================
+
+def check_proot():
+    if not command_exists("proot-distro"):
+        print(RED + "❌ proot-distro nu este instalat." + RESET)
+        print()
+        print("Instalează-l cu:")
+        print("pkg update -y")
+        print("pkg install proot-distro -y")
+        pause()
+        return False
+
+    return True
+
+
+# ============================================================
+# VPS ID
+# ============================================================
+
+def make_id():
+    data = load_data()
+
+    number = 1
+
+    while True:
+        vps_id = f"nightu-vps-{number}"
+
+        if vps_id not in data["vps"]:
+            return vps_id
+
+        number += 1
+
+
+# ============================================================
+# VALID NAME
+# ============================================================
+
+def clean_name(name):
+    name = name.strip()
+
+    name = re.sub(
+        r"[^a-zA-Z0-9 _-]",
+        "",
+        name
+    )
+
+    return name[:32]
+
+
+# ============================================================
+# VPS STATUS
+# ============================================================
+
+def get_status(vps_id):
+    if not check_proot_quiet():
+        return "UNKNOWN"
+
+    result = run("proot-distro ps")
+
+    if result.returncode != 0:
+        return "UNKNOWN"
+
+    output = result.stdout.lower()
+
+    if vps_id.lower() in output:
+        return "🟢 RUNNING"
+
+    return "⚪ STOPPED"
+
+
+def check_proot_quiet():
+    return command_exists("proot-distro")
+
+
+# ============================================================
+# CREATE VPS
+# ============================================================
+
+def create_vps():
+    clear()
+    banner()
+
+    if not check_proot():
+        return
+
+    data = load_data()
+
+    print(CYAN + "➕ CREATE NEW VPS\n" + RESET)
+
+    name = input("🌙 VPS Name: ")
+    name = clean_name(name)
+
+    if not name:
+        print(RED + "❌ Nume invalid." + RESET)
+        pause()
+        return
+
+    print("""
+Alege sistemul:
+
+1. Ubuntu
+2. Debian
+3. Alpine
+""")
+
+    choice = input("🖥️ OS > ").strip()
+
+    systems = {
+        "1": "ubuntu",
+        "2": "debian",
+        "3": "alpine"
+    }
+
+    if choice not in systems:
+        print(RED + "❌ OS invalid." + RESET)
+        pause()
+        return
+
+    image = systems[choice]
+
+    ram = input("🧠 RAM profil [2048 MB]: ").strip() or "2048"
+    cpu = input("⚡ CPU profil [2 cores]: ").strip() or "2"
+    disk = input("💾 Disk profil [10 GB]: ").strip() or "10"
+
+    try:
+        ram = int(ram)
+        cpu = int(cpu)
+        disk = int(disk)
+
+        if ram <= 0 or cpu <= 0 or disk <= 0:
+            raise ValueError
+
+    except ValueError:
+        print(RED + "❌ Resurse invalide." + RESET)
+        pause()
+        return
+
+    vps_id = make_id()
+
+    print()
+    print(PURPLE + "🌙 Creating VPS..." + RESET)
+    print(f"ID: {vps_id}")
+    print(f"OS: {image}")
+
+    command = (
+        f"proot-distro install "
+        f"--override-alias {vps_id} {image}"
+    )
+
+    result = subprocess.run(
+        command,
+        shell=True
+    )
+
+    if result.returncode != 0:
+        print(RED + "\n❌ VPS creation failed." + RESET)
+        pause()
+        return
+
+    data["vps"][vps_id] = {
+        "name": name,
+        "os": image,
+        "ram": ram,
+        "cpu": cpu,
+        "disk": disk,
+        "created": time.strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+    }
+
+    save_data(data)
+
+    print()
+    print(GREEN + "╔════════════════════════════════════╗")
+    print("║       ✅ VPS CREATED!              ║")
+    print("╚════════════════════════════════════╝" + RESET)
+
+    print(f"\n🌙 Name : {name}")
+    print(f"🆔 ID   : {vps_id}")
+    print(f"🖥️ OS   : {image}")
+    print(f"🧠 RAM  : {ram} MB")
+    print(f"⚡ CPU  : {cpu} cores")
+    print(f"💾 Disk : {disk} GB")
+
+    pause()
+
+
+# ============================================================
+# LIST VPS
+# ============================================================
+
+def list_vps():
+    clear()
+    banner()
+
+    data = load_data()
+
+    if not data["vps"]:
+        print(YELLOW + "📭 Nu există VPS-uri." + RESET)
+        pause()
+        return
+
+    print(CYAN + "📋 YOUR VPS SERVERS\n" + RESET)
+
+    for number, (vps_id, info) in enumerate(
+        data["vps"].items(),
+        1
+    ):
+        status = get_status(vps_id)
+
+        print(
+            f"{PURPLE}{number}.{RESET} "
+            f"{WHITE}{info['name']}{RESET}"
+        )
+
+        print(f"   ID     : {vps_id}")
+        print(f"   Status : {status}")
+        print(f"   OS     : {info['os']}")
+        print(f"   CPU    : {info['cpu']} cores")
+        print(f"   RAM    : {info['ram']} MB")
+        print(f"   Disk   : {info['disk']} GB")
+        print()
+
+    pause()
+
+
+# ============================================================
+# SELECT VPS
+# ============================================================
+
+def select_vps():
+    data = load_data()
+
+    if not data["vps"]:
+        print(YELLOW + "📭 Nu există VPS-uri." + RESET)
+        pause()
+        return None
+
+    items = list(data["vps"].items())
+
+    print()
+
+    for i, (vps_id, info) in enumerate(items, 1):
+        print(
+            f"{i}. {info['name']} "
+            f"({vps_id})"
+        )
+
+    choice = input("\n🌙 Select VPS > ").strip()
+
+    try:
+        index = int(choice) - 1
+
+        if index < 0 or index >= len(items):
+            raise ValueError
+
+        return items[index][0]
+
+    except ValueError:
+        print(RED + "❌ Selecție invalidă." + RESET)
+        pause()
+        return None
+
+
+# ============================================================
+# START VPS
+# ============================================================
+
+def start_vps():
+    clear()
+    banner()
+
+    if not check_proot():
+        return
+
+    data = load_data()
+
+    vps_id = select_vps()
+
+    if not vps_id:
+        return
+
+    info = data["vps"][vps_id]
+
+    clear()
+    banner()
+
+    print(
+        f"▶️ Pornesc {WHITE}{info['name']}{RESET}...\n"
+    )
+
+    print(
+        GRAY +
+        "Pentru PRoot, 'Start' deschide o sesiune Linux."
+        + RESET
+    )
+
+    print()
+
+    subprocess.run(
+        f"proot-distro login {vps_id}",
+        shell=True
+    )
+
+
+# ============================================================
+# STOP VPS
+# ============================================================
+
+def stop_vps():
+    clear()
+    banner()
+
+    if not check_proot():
+        return
+
+    print(CYAN + "⏹️ STOP VPS\n" + RESET)
+
+    print(
+        "PRoot nu este o VM clasică.\n"
+        "Nightu poate opri sesiunile PRoot active.\n"
+    )
+
+    result = run("proot-distro ps")
+
+    if result.stdout.strip():
+        print(result.stdout)
+    else:
+        print("Nu există sesiuni active.")
+
+    print()
+
+    pid = input(
+        "PID-ul sesiunii de oprit "
+        "(ENTER pentru anulare): "
+    ).strip()
+
+    if not pid:
+        return
+
+    if not pid.isdigit():
+        print(RED
     try:
         with open(DATA_FILE, "r") as f:
             return json.load(f)
