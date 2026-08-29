@@ -692,6 +692,67 @@ Actual filesystem expansion will be added in a future version.
 
 
 # =========================
+# ROOT ACCESS / SHELL
+# =========================
+
+
+def root_access():
+    """Connect to a VPS container with root shell access."""
+    name = select_vps()
+
+    if not name:
+        return
+
+    status = get_status(name)
+    
+    # Check if VPS is running
+    if "RUNNING" not in status:
+        print("\n❌ VPS is not running. Start it first.")
+        pause()
+        return
+
+    clear()
+    banner()
+
+    print(f"""
+🔓 ROOT ACCESS - {name}
+
+You're about to access the root shell of your VPS.
+Type 'exit' to return to the menu.
+
+Available options:
+  • Install Pterodactyl Panel: curl -sSL https://get.pterodactyl.io | bash
+  • Update system: apt update && apt upgrade -y
+  • Install utilities: apt install -y curl wget git nano
+
+""")
+
+    input("Press ENTER to connect to root shell...")
+
+    # Use exec to connect to the container interactively
+    backend = detect_backend()
+    cfg = load_config()
+
+    if backend == "ssh":
+        remote = cfg.get("ssh_remote")
+        if remote:
+            cmd = ["ssh", remote, "docker", "exec", "-it", name, "/bin/bash"]
+        else:
+            cmd = ["docker", "exec", "-it", name, "/bin/bash"]
+    else:
+        cmd = get_container_cmd("exec", "-it", name, "/bin/bash")
+
+    try:
+        # Use os.system for interactive shell to allow full TTY
+        os.system(" ".join(cmd))
+        print("\n✅ Shell session closed.")
+    except Exception as e:
+        print(f"\n❌ Failed to access shell: {e}")
+
+    pause()
+
+
+# =========================
 # DELETE
 # =========================
 
@@ -787,6 +848,7 @@ def vps_manager():
 ║  9. 💾 Change Disk                         ║
 ║ 10. 📋 List VPS                            ║
 ║ 11. 🗑️  Delete VPS                         ║
+║ 12. 🔓 Root Access                         ║
 ║                                            ║
 ║  0. ↩️  Back                               ║
 ╚════════════════════════════════════════════╝
@@ -827,6 +889,9 @@ def vps_manager():
 
         elif choice == "11":
             delete_vps()
+
+        elif choice == "12":
+            root_access()
 
         elif choice == "0":
             break
